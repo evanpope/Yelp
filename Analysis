@@ -1,0 +1,435 @@
+# yelpAnalysis_NN_MM_DD.R 
+#####################################
+#####################################
+
+rm(list=ls(all=TRUE)) #clears workspace
+
+#############################
+# Install/Load Packages
+#############################
+#install.packages("RJSONIO") # Alows us to parse the JSON files.
+library(RJSONIO)
+
+#install.packages("survival")
+library(survival)
+
+#install.packages("ggplot2")
+library(ggplot2)
+
+#install.packages("splines")
+library(splines)
+
+#install.packages("stringr") # Hadley Wickham's magic package for workign with strings.
+library(stringr)
+
+#install.packages("plyr")
+library(plyr)
+
+#install.packages("verification")
+library(verification)
+
+#install.packages("KMsurv")
+library(KMsurv)
+
+#install.packages("boot")
+library(boot) 
+
+#install.packages("fpc")
+library(fpc)
+
+#install.packages("ROCR")
+library(ROCR)
+
+#install.packages("rpart")
+library(rpart)
+
+#install.packages("e1071")
+library(e1071)
+
+#install.packages("nnet")
+library(nnet)
+
+#install.packages("xtable")
+library(xtable)
+
+#install.packages("ggmap")
+library(ggmap)
+
+#install.packages("neuralnet")
+library(neuralnet)
+
+##############################################################
+# Read in cleaned data created by :  yelpMunging_NN_MM_DD.R
+##############################################################
+#YELP <- read.csv("cleanData.csv")
+cleanDataFrame <- read.csv("cleanData.csv")
+#################################################################################
+############################# HEAT MAPS #########################################
+#################################################################################
+# Phoenix <- get_map(location = 'Phoenix', zoom = 11)
+# 
+# win.graph()
+# ggmap(Phoenix) + geom_point(aes(x=longitude, y=latitude, color=stars), size=5, data=cleanDataFrame, alpha=.5, na.rm=TRUE) + scale_color_gradient(low="brown",high="green")
+# 
+# ggmap(Phoenix) + geom_point(aes(x=longitude, y=latitude, color=duration), size=5, data=cleanDataFrame, alpha=.5, na.rm=TRUE) + scale_color_gradient(low="red",high="green")
+# 
+# win.graph()
+# ggmap(Phoenix) + geom_point(aes(x=longitude, y=latitude, color=open), size=5, data=cleanDataFrame, alpha=.5, na.rm=TRUE) + scale_color_gradient(low="red",high="green")
+
+#################################################################################
+#################################################################################
+#################################################################################
+cleanDataFrame$restaurantType<- cleanDataFrame$full_address<- cleanDataFrame$city<- cleanDataFrame$name<- cleanDataFrame$longitude<- cleanDataFrame$state<- cleanDataFrame$latitude<- cleanDataFrame$type<- cleanDataFrame$categories1<- cleanDataFrame$categories2<- cleanDataFrame$categories3<- cleanDataFrame$categories4<- cleanDataFrame$categories5<- cleanDataFrame$categories6<- cleanDataFrame$categories7<- cleanDataFrame$categories8<- cleanDataFrame$categories9<- cleanDataFrame$categories10<- cleanDataFrame$isRestaurant <- cleanDataFrame$..1<-NULL
+
+#CREATE 90/10 TEST/TRAIN DATA
+set.seed(6704)
+
+# Closed <- subset(cleanDataFrame, open==0)
+# Open <- subset(cleanDataFrame, open==1)
+# Recession <- subset(cleanDataFrame, recession==1)
+# Normal <- subset(cleanDataFrame, recession==0)
+# Mature <- subset(cleanDataFrame, duration>365)
+# New <- subset(cleanDataFrame, duration<365)
+
+#################################################################################
+######################## Descriptive Stats ######################################
+#################################################################################
+# summary(Closed)
+# summary(Open)
+# summary(cleanDataFrame)
+
+# correlation <- cor(cleanDataFrame[2:9])
+# plot(Open$stars, Open$duration)
+# plot(Open$review_count, Open$duration)
+# plot(Closed$stars, Closed$duration)
+#################################################################################
+############################# K-MEANS ###########################################
+#################################################################################
+attach(cleanDataFrame)
+cluster <- data.frame(stars, review_count, count, Freq, duration)
+kmeans <- kmeans(cluster[1:4],5)
+kmeans_table <- table(kmeans$cluster)
+plotcluster(cleanDataFrame$stars, kmeans$cluster)
+kmeans_plot <- kmeans$centers
+###################################################
+############# SUBSET ##############################
+###################################################
+subset <- sample(nrow(cleanDataFrame), nrow(cleanDataFrame) * 0.75) 
+yelp_train = cleanDataFrame[subset, ] 
+yelp_test = cleanDataFrame[-subset, ]
+###################################################
+############# LOGIT MODELS ########################
+###################################################
+nullmodel = glm(open ~ 1, family=binomial, data = yelp_train)
+fullmodel = glm(open ~ .  -business_id -delta, family=binomial, data=yelp_train)
+
+model.step <- step(fullmodel, direction = "backward")
+model.step1 <- step(nullmodel, scope = list(lower = nullmodel,upper = fullmodel),direction = "forward")
+model.step2 <- step(nullmodel, scope = list(lower = nullmodel,upper = fullmodel),direction = "both")
+
+yelplog <- glm(open ~ . -business_id -delta, family = binomial, yelp_train) 
+yelplog1 <- glm(open ~ recession + review_count + count + duration + stars + avgRev + Freq, family = binomial, yelp_train) #Best AIC Model 
+
+#PROBIT
+yelpProbit1 <- glm(open ~ recession + review_count + count + duration + stars + 
+                     avgRev + Freq, family = binomial(link=probit), yelp_train) #Best AIC Model 
+summary(yelpProbit1)
+
+summary(yelplog) 
+summary(yelplog1) 
+AIC(yelplog)
+AIC(yelplog1)
+
+#win.graph()
+hist(predict(yelplog1)) 
+hist(predict(yelplog1, type = "response"))
+Logit1_table <- table(predict(yelplog1, type = "response") > 0.5)
+###########################################################################
+################## In-Sample Performace (Traning Set) #####################
+###########################################################################  
+yelp_Prob <- predict(yelplog1, type = "response")
+yelpinsample <- yelp_Prob > 0.5
+yelpinsample <- as.numeric(yelpinsample) 
+Insample_log_table <- table(yelp_train$open, yelpinsample, dnn = c ("Truth", "Predicted")) 
+
+#Mean Squared Error
+mean(ifelse(yelp_train$open != yelpinsample, 1, 0))
+
+#Out-of-Sample Performance (Testing set)
+yelpoutsample <- predict(yelplog1, yelp_test, type = "response") 
+yelpoutpred <- yelpoutsample > 0.5
+#yelpoutsample <- as.numeric(yelpoutpred) 
+Outsample_log_table <- table(yelp_test$open, yelpoutpred, dnn = c("Truth", "Predicted"))
+
+#MSE
+mean(ifelse(yelp_test$open != yelpoutpred, 1, 0)) 
+#######################################################################
+############ Decision Trees ###########################################
+#######################################################################
+yelp_rpart<- rpart(open ~ review_count + recession + duration + count + stars + Freq + avgRev + avgStar, data=yelp_train,method="anova") #best AIC model 
+#predict(yelp_rpart)
+#printcp(yelp_rpart) #print cp table
+plotcp(yelp_rpart)  #plot cross-validation results
+#print(yelp_rpart)
+#summary(yelp_rpart)
+#win.graph()
+plot(yelp_rpart)
+text(yelp_rpart)
+
+####### Prune Tree ############################
+yelp_prunetree<-prune(yelp_rpart, cp=.017) # first observation below line
+
+plot(yelp_prunetree)
+text(yelp_prunetree)
+# plotcp(yelp_prunetree)
+# printcp(yelp_prunetree)
+
+mean((predict(yelp_prunetree) - yelp_train$open)^2)
+mean((predict(yelp_rpart, yelp_test) - yelp_test$open)^2)
+
+###### Predictions ############################
+Yelp_train_prediction_tree <- predict(yelp_rpart) #in sample
+Yelp_train_prediction_tree <- predict(yelp_rpart, yelp_test) #out of sample
+#MSE 
+#mean((Yelp_train_prediction_tree-yelp_test$open)^2) #mean squared error
+
+###### Comaprison w/ Best AIC   ###############
+#yelp_test_prediction_regression1 <- predict(model.step, yelp_test)
+#mean((yelp_test_prediction_regression1-yelp_test$open)^2)
+yelp_test_predict_reg1 <- predict(yelp_prunetree, yelp_test)
+mean((yelp_test_predict_reg1-yelp_test$open)^2)
+
+Tree <- predict(yelp_rpart, type="vector", yelp_test[,-2])
+tree_table <- table(pred=Tree, true=yelp_test[,2])
+Tree <- predict(yelp_rpart, type="vector", yelp_test[,-2], propability=TRUE)
+
+Pred_Tree <- predict(yelp_rpart, yelp_test[,-2])
+Tree_table <- table(pred=Pred_Tree, true=yelp_test [,2])
+Pred_Tree <- predict(yelp_rpart, yelp_test[,-2], probability=TRUE)
+
+#######################################################################
+############ Survival Analysis ########################################
+#######################################################################
+attach(cleanDataFrame)
+### Renaming variables ###
+time <- duration
+count <- count
+event <- delta
+x <- stars
+y <- review_count
+z <- recession
+
+summary(time)
+summary(event)
+summary(x)
+
+
+### Survival ###
+Yelp_Surv <- survfit(Surv(time, event) ~ x)
+summary(Yelp_Surv)
+
+
+Recession_Surv <- survfit(Surv(time, event) ~ z)
+summary(Recession_Surv)
+
+#win.graph()
+plot(Yelp_Surv, xlab="Time (in days)", ylab="Survival Probability")
+plot(Recession_Surv, xlab="Time (in days)", ylab="Survival Probability")
+##################################################################
+################## SVM ###########################################
+##################################################################
+#obj <- tune.svm(open ~ .-business_id -delta, data=yelp_train, seq(.5,.9, by=.1), cost = seq(100,1000, by = 100)) #tuning SVM model, Computationally expensive
+#summary(obj) Result = best performance when cost=100
+
+svm_linear <- svm(open ~ review_count + recession + duration + count + stars + Freq + avgRev + avgStar, data=yelp_train, cost=100, gamma=1) #Linear,  Best AIC
+summary(svm_linear)
+
+svmoutsample_linear <- predict(svm_linear, yelp_test, type = "response") 
+svm_outpred_linear  <- svmoutsample_linear > 0.5
+svm_outpred_linear  <- as.numeric(svm_outpred_linear) 
+table(yelp_test$open, svm_outpred_linear, dnn = c("Truth", "Predicted"))
+
+svm_pred_linear  <- predict(svm_linear, yelp_test[,-2])
+svm_table_linear <- table(pred=svm_pred_linear, true=yelp_test [,2])
+svm_pred_linear  <- predict(svm_linear, yelp_test[,-2], probability=TRUE)
+py_linear <- attr(svm_pred_linear, "probabilities")[,2]
+
+svm_table_linear
+plot(svm_linear, data=yelp_test, open~count)
+
+yelp_SVM <- predict(svm_linear, yelp_test)
+mean((yelp_SVM-yelp_test$open)^2)
+
+plot.svm(svm_linear, data=yelp_train)
+#################### Polynomial ####################################
+
+svm_poly <- svm(open ~ review_count + recession + duration + count + stars + Freq + avgRev + avgStar, data=yelp_train, cost=100, degree=3) #Polynomial, Best AIC
+summary(svm_poly)
+
+svmoutsample_poly<- predict(svm_poly, yelp_test, type = "response") 
+svm_outpred_poly <- svmoutsample_poly > 0.5
+svm_outpred_poly <- as.numeric(svm_outpred_poly) 
+table(yelp_test$open, svm_outpred_poly, dnn = c("Truth", "Predicted"))
+
+svm_pred_poly <- predict(svm_poly, yelp_test[,-2])
+svm_table_poly <- table(pred=svm_pred_poly, true=yelp_test [,2])
+svm_pred_poly <- predict(svm_poly, yelp_test[,-2], probability=TRUE)
+py_poly <- attr(svm_pred_poly, "probabilities")[,2]
+
+svm_table_poly
+plot(svm_poly, data=yelp_test, open~count)
+
+yelp_poly <- predict(svm_poly, yelp_test)
+mean((yelp_poly-yelp_test$open)^2)
+
+##################### Radial-Basis ###############################
+
+#svm_Radial <- svm(open ~ review_count + recession + duration + count + stars + Freq + avgRev + avgStar, data=yelp_train, kernel="radial" cost=100, gamma=1) #sigmoid, Best AIC
+# summary(svm_sigmoid)
+# 
+# svmoutsample_sigmoid<- predict(svm_sigmoid, yelp_test, type = "response") 
+# svm_outpred_sigmoid <- svmoutsample_sigmoid > 0.5
+# svm_outpred_sigmoid <- as.numeric(svm_outpred_sigmoid) 
+# table(yelp_test$open, svm_outpred_sigmoid, dnn = c("Truth", "Predicted"))
+# 
+# svm_pred_sigmoid <- predict(svm_sigmoid, yelp_test[,-2])
+# svm_table_sigmoid <- table(pred=svm_pred_sigmoid, true=yelp_test [,2])
+# svm_pred_sigmoid <- predict(svm_sigmoid, yelp_test[,-2], probability=TRUE)
+# py_sigmoid <- attr(svm_pred_sigmoid, "probabilities")[,2]
+# 
+# roc.plot(yelp_test$open == "1", svmoutsample_sigmoid)$roc.vol
+# sigmoid_outsample <- predict(svm_sigmoid, yelp_test, type = "response")
+# roc.plot(x = yelp_test$open == "1", pred = cbind (sigmoid_outsample, svmoutsample_sigmoid), legend = TRUE, leg.text = c("Polinomial Kernel"))$roc.vol
+# 
+# win.graph()
+# svm_table_sigmoid 
+# plot(svm_sigmoid, data=yelp_test, open~count)
+# 
+# mean((predict(svm_sigmoid) - yelp_train$open)^2)
+
+##################################################################
+################## Neural Nets ###################################
+##################################################################
+
+#neither neural net package can handle both visualization nor ROC curve.
+neural_net <- neuralnet(open ~ review_count + recession + duration + count + stars + Freq + avgRev + avgStar, data=yelp_train, hidden=0,rep=10, err.fct="ce", linear.output=FALSE)
+
+summary(neural_net)
+print(neural_net,hidden=0,rep=10, err.fct="ce", linear.output=false)
+
+neural_net$result.matrix
+
+#win.graph()
+
+#predict(Yelp_net)
+
+Yelp_net <- nnet(open ~ review_count + recession + duration + count + stars + Freq + avgRev + avgStar, size=0, skip=TRUE, lineout=TRUE,  data=yelp_train)
+
+outsample_nnet<- predict(Yelp_net, yelp_test, type="raw") 
+outsample_nnet <- outsample_nnet > 0.5
+outsample_nnet <- as.numeric(outsample_nnet) 
+nnets_table <- table(yelp_test$open, outsample_nnet, dnn = c("Truth", "Predicted"))
+
+yelp_nnet <- predict(Yelp_net, yelp_test[,-2])
+nn_table <- table(pred=yelp_nnet, true=yelp_test [,2])
+yelp_nnet <- predict(Yelp_net, yelp_test[,-2], probability=TRUE)
+
+yelp_Nets <- predict(Yelp_net, yelp_test)
+mean((yelp_Nets-yelp_test$open)^2)
+
+#####################################
+############## PLOTS ################
+#####################################
+
+#LOGIT
+roc.plot(yelp_test$open == "1", yelpoutsample)
+roc.plot(yelp_test$open == "1", yelpoutsample)$roc.vol
+#TREE
+roc.plot(yelp_test$open == "1", Tree)
+roc.plot(yelp_test$open == "1", Tree)$roc.vol
+#SVM POLY
+roc.plot(yelp_test$open == "1", svmoutsample_poly)
+roc.plot(yelp_test$open == "1", svmoutsample_poly)$roc.vol
+#SVM LINEAR
+roc.plot(yelp_test$open == "1", svmoutsample_linear)
+roc.plot(yelp_test$open == "1", svmoutsample_linear)$roc.vol
+#Neural Net
+roc.plot(yelp_test$open == "1", outsample_nnet)
+roc.plot(yelp_test$open == "1", outsample_nnet)$roc.vol
+#Total Plot
+pdf(file=ROC_CURVE.pdf,width=10, height=10)
+ROC_CURVE <- roc.plot(x = yelp_test$open == "1", pred = cbind (yelpoutsample, Tree, poly_outsample, linear_outsample), legend = TRUE, leg.text = c("Logit", "Tree", "Polinomial Kernel", "Linear Kernel"))$roc.vol
+dev.off() 
+
+#win.graph()
+# plot(Yelp_net)
+# plot(YELP$city)
+# plot(table(YELP$stars))
+# plot(table(YELP$restaurantType))
+# hist(YELP$stars)
+# plot(YELP$stars, YELP$review_count)
+# plot(YELP$open, YELP$review_count)
+# plot(YELP$stars, YELP$duration)
+# plot(YELP$duration, YELP$restaurantType)
+# plot(YELP$review_count, YELP$stars)
+# plot(YELP$avgStar, YELP$restaurantType)
+# plot(YELP$open, YELP$..1)
+# plot(Closed$review_count, Closed$duration)
+# plot(Closed$stars, Closed$review_count)
+# plot(Closed$duration, Closed$review_count)
+# plot(Closed$duration, Closed$stars)
+# plot(Closed$recession, Closed$duration)
+# plot(YELP$count, YELP$stars)
+# plot(YELP$count, YELP$review_count)
+# plot(YELP$count, YELP$duration)
+# plot(YELP$Freq, YELP$count)
+# plot(YELP$count, YELP$stars)
+# plot(YELP$count, YELP$stars)
+# plot(YELP$count, YELP$avgStars)
+# plot(YELP$count, YELP$avgRev)
+# plot(Recession$open)
+# plot(New$restaurantType)
+# plot(Mature$restaurantType)
+# plot(New$review_count, New$count)
+# plot(New$count)
+# plot(Mature$count)
+
+# test <- cleanDataFrame$business_id <- cleanDataFrame$open <-  cleanDataFrame$Freq <- cleanDataFrame$avgRev <-  cleanDataFrame$avgStar <-  cleanDataFrame$duration <-  cleanDataFrame$recession <-  cleanDataFrame$delta <- NULL
+# test <- subset(cleanDataFrame, count > 40)
+# plot(test$count, test$review_count)
+#####################################
+############## TABLES ###############
+#####################################
+
+Logit_Result <- xtable(yelplog1)
+print.xtable(yelplog1, type="latex", file="logit_results.tex")
+
+Roc_Curve <- xtable(ROC_CURVE)
+print.xtable(Roc_Curve, type="latex", file="Roc_Curve.tex")
+
+tableCor<-xtable(correlation)
+print.xtable(tableCor, type="latex", file="corr.tex")
+
+km_table <- xtable(kmeans_table)
+print.xtable(km_table, type="latex", file="KM_Table.tex")
+
+logit1_table <- xtable(Logit1_table)
+print.xtable(logit1_table, type="latex", file="Logit_Table.tex")
+
+InsmapleLog_table <- xtable(Insample_log_table)
+print.xtable(InsmapleLog_table, type="latex", file="Insample_logit.tex")
+
+Out_Log_table <- xtable(Outsample_log_table)
+print.xtable(Out_Log_table, type="latex", file="Outsample_Logit.tex")
+
+NNets_Table <- xtable(nnets_table)
+print.xtable(NNets_Table, type="latex", file="NNets_Table.tex")
+
+Probit <- xtable(yelpProbit1)
+print.xtable(Probit, type="latex", file="Probit.tex")
+
+Logit <- xtable(yelplog1)
+print.xtable(Logit, type="latex", file="Logit.tex")
+
+
+
