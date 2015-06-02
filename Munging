@@ -1,1 +1,295 @@
 Yelp munging 
+
+###################################
+# - Read in and clean Yelp Data File.
+# - Output .csv and Rdataframe object
+#####################################
+
+rm(list=ls(all=TRUE)) #clears workspace
+
+#############################
+# Install/Load Packages
+#############################
+#install.packages("RJSONIO") # Alows us to parse the JSON files.
+library(RJSONIO)
+
+#install.packages("stringr") # Hadley Wickham's magic package for workign with strings.
+library(stringr)
+
+#install.packages("plyr")
+library(plyr)
+
+#install.packages("sp")
+library(sp)
+
+###############################
+# Define Functions
+###############################
+
+
+#----------------------------------
+# unpackJSON()
+# Read in JSON and drop observation names.
+# Output for Yelp data is a data frame where the columns are lists, sometimes those lists have multiple elements that must be further processed by the subsequent functions in this script
+
+#filepath <- "yelp_academic_dataset_business.json" #used for testing the function below
+unpackJSON <- function(filepath){
+  con <- file(filepath, "r") # open connection and pull file given with "filepath"
+  input <- readLines(con, -1L) # read the file in "line by line" into an R object
+  jsonData <- sapply(input,fromJSON) # Run fromJSON() on each element in input.
+  close(con) # close the connection that was made when con was created.
+  dimnames(jsonData)[2] <- NULL # This drops the long names that each observation was given by fromJSON()
+  varNames <- dimnames(jsonData)[1] # Stores the variable names (which are the rownames right now)
+  jsonDataAsDataFrame <- data.frame(jsonData) # Take long list and colate by observation into a data.frame
+  jsonDataAsDataFrameTransposed <- as.data.frame(t(jsonDataAsDataFrame)) # Transpose so the variables are the columns ans the observations are the rows.
+  return(jsonDataAsDataFrameTransposed) # Only return this last data frame when you run the function, scrap everything else.
+} # closing UnpackJSON function
+
+#--------------------
+# maxNumberOfElementsPerVar()
+# This helper function takes the ouput from unpackJSON() and determines the maximun number of elements each observation-variable pair contains. For this yelp data the only variable with multiple elements per observation is $categories.
+
+#rawDataFrame <- unpackJSON("yelp_academic_dataset_business.json") # used for testing
+maxNumberOfElementsPerVar<- function(rawDataFrame){
+  maxElementsForEachVar <- list() # This is a storage container that will store the max number of elements any var can have.
+  for (i in 1:ncol(rawDataFrame)){
+    oneRawVar <- rawDataFrame[,i]
+    oneVarLengths <- list() # This is a container that will hold how many entries each observation has for the ith variable
+    for (j in 1:length(oneRawVar)){
+      oneVarLengths[[j]] <- length(oneRawVar[[j]]) # For the ith variable how many elements does the jth observation have.
+    } # Ends loop across each observation-variable pair for the ith variable.
+    maxElementsForEachVar[[i]] <- max(unlist(oneVarLengths))
+  }# Ends for loop across variables/columns
+unlist(maxElementsForEachVar)
+}# ends maxNumberOfElementsPerVar
+
+
+#----------------------------------
+# createNewVars()
+# This function takes the output from unpackJSON() and creates new variables for any existing variable that has multiple elements. It uses the maximum number of elements a variable has and creates that many new variables. Then it breaks apart the old variables and places the elements into their own cell.
+# The new variables use the name of the old variable as the base of their name.
+      # For example the variable $categories becomes the variables $categories1, $categories2, $categories3 etc...
+
+#rawDataFrame <- unpackJSON("yelp_academic_dataset_business.json") # used for testing the function
+createNewVars <- function(rawDataFrame){
+  numberOfNewVars <- maxNumberOfElementsPerVar(rawDataFrame) # Determine how many new variables each old variable needs
+  for (i in 1:ncol(rawDataFrame)){ # Loop across the variables 
+    if (numberOfNewVars[i]>1){ # does the ith variable have any observations with more than one element, if so do the following.
+      varName <- names(rawDataFrame[i]) # Store the variable name
+       tempVar <- lapply(rawDataFrame[[i]], function(v) { c(v, rep(NA, numberOfNewVars[i]-length(v)))}) # Fill in with NA so the shape is square
+      tempDataFrame <- data.frame(matrix(unlist(tempVar,use.names=FALSE),nrow=nrow(rawDataFrame),ncol=numberOfNewVars[i],byrow=TRUE), stringsAsFactors=FALSE) # make the variable its own data frame
+      names(tempDataFrame) <- paste(varName,seq(1:numberOfNewVars[i]),sep="") # name the new variables based on the old one.
+      combinedDataFrame <- data.frame(rawDataFrame,tempDataFrame) #combine the original data with the new expanded one
+      
+    } # ends If Loop
+  } #ends i loop over the vars
+
+#Now drop the old categories variable  
+newDataFrame <- combinedDataFrame 
+  
+newDataFrame$categories <- NULL
+newDataFrame$neighborhoods <- NULL  
+  
+# Now We need to convert the variables that are still lists into vectors
+  for (i in 1:ncol(newDataFrame)){
+newDataFrame[i] <- unlist(newDataFrame[i])
+  } # end For loop 
+ 
+    
+newDataFrame    
+    
+} # Ends Function
+
+
+
+############################################################################################
+################# Using the Functions ######################################################
+############################################################################################
+
+unpackedRawData <- unpackJSON("yelp_academic_dataset_business.json") # You need to provide the path on your machine here.
+
+expandedDataFrame <- createNewVars(unpackedRawData)
+
+
+############################################################################################
+################# Recession variable #######################################################
+############################################################################################
+
+
+
+# Create a temporary data frame to check each category is "Restaurants".
+# logicalIsRestaurants<-t(apply(as.matrix(expandedDataFrame[,12:21]),1,str_detect,"Restaurants")) # This works but next line is way simpler.
+
+logicalIsRestaurants <- expandedDataFrame == "Restaurants"
+
+
+# Now create a new variable in the main data frame. For each observation it will be TRUE if any of the columns in the temporary data frame are TRUE for that observation.
+expandedDataFrame$isRestaurant <- apply(logicalIsRestaurants,1,any,na.rm=TRUE)
+
+# # Now you could use isAResturant to drop all the non-resturants. 
+expandedDataFrame <- subset(expandedDataFrame, isRestaurant==TRUE)
+
+# Now I am going to drop all of the 'Resturants" strings out of the data frame because we know they are all resturants.
+
+logicalIsRestaurants2 <- expandedDataFrame == "Restaurants"
+expandedDataFrame[logicalIsRestaurants2] <- NA
+
+logicalIsfastfood <- expandedDataFrame == "Fast Food"
+expandedDataFrame[logicalIsfastfood] <- NA
+
+logicalIsFood <- expandedDataFrame == "Food"
+expandedDataFrame[logicalIsFood] <- NA
+
+logicalIsActivelife<- expandedDataFrame == "Active Life"
+expandedDataFrame[logicalIsActivelife] <- NA
+
+logicalIsfastfood<- expandedDataFrame == "Fast Food"
+expandedDataFrame[logicalIsfastfood] <- NA
+
+# Now I am going to copy categories1 as a new variable called restaurantType
+expandedDataFrame$restaurantType <- expandedDataFrame$categories1
+
+# Now I will run a loop to recursively check expandedDataFrame$restaurantType checking for any NA's. On the first check if there is an NA then the script will get the string from categories2. Then on the second check if there is an NA it will get the string from categories3, etc... until it checks all 10 categories.
+for (k in 1:9){
+  expandedDataFrame$restaurantType <- ifelse(is.na(expandedDataFrame$restaurantType),expandedDataFrame[,k+12],expandedDataFrame$restaurantType)
+}
+
+##########################################################################
+###### OPEN Dummy Variable ###############################################
+##########################################################################
+
+expandedDataFrame$open <- factor ( with ( expandedDataFrame, ifelse ( ( open == TRUE ), 1 , 0 ) ) )
+
+##########################################################################
+###### Remove Chain Restos ###############################################
+##########################################################################
+
+# count each 'name'
+tt <- table(expandedDataFrame$name)
+
+
+# subset data frame and assign it to a data frame with a new name
+expandedDataFrame2 <- subset(expandedDataFrame, name %in% names(tt[tt < 3]))
+
+##########################################################################
+###### Category Frequency ################################################
+##########################################################################
+
+catFrequency<-as.data.frame(table(unique(expandedDataFrame2)$restaurantType))
+
+names(catFrequency)<- c("restaurantType","Freq")
+
+expandedDataFrame2 <- merge(expandedDataFrame2,catFrequency,by="restaurantType",sort=FALSE, all=TRUE)
+
+expandedDataFrame2$Freq<- (expandedDataFrame2$Freq-1)
+names(expandedDataFrame2$Freq)<- c("competitors")
+
+##########################################################################
+###### Average Star Variable #############################################
+##########################################################################
+
+avgStar <- tapply(expandedDataFrame2$stars,expandedDataFrame2$restaurantType,mean,simplify=TRUE)
+
+avgStars2 <- as.data.frame(avgStar,)
+avgStars2$restaurantType<-row.names(avgStars2)
+row.names(avgStars2)=NULL
+
+# avgStars2 <- rename(avgStars2, c(category="restaurantType"))
+
+##########################################################################
+###### Average Review Variable ###########################################
+##########################################################################
+avgRev <- tapply(expandedDataFrame2$review_count,expandedDataFrame2$restaurantType,mean,simplify=TRUE)
+
+avgRev2 <- as.data.frame(avgRev,)
+avgRev2$category<-row.names(avgRev2)
+row.names(avgRev2)=NULL
+
+avgRev2 <- rename(avgRev2, c(category="restaurantType"))
+
+RevStar <- merge(avgRev2, avgStars2, by="restaurantType")
+
+expandedDataFrame2 <- merge(expandedDataFrame2, RevStar, by="restaurantType")
+
+
+#######################################################################################################
+####### Get the Reviews and Calculate the Duration And Recession Indicator #########################
+####################################################################################################
+###
+### Note this is a very resource intensive process after the first run the results are writen out so on sucessive runs the results can just be read back in. 
+###     # To run a clean run simply delete durationAndRecession.csv from the working directory. 
+
+
+# If the duration has already been calculated and is in the folder skip the re-reading in of the data
+
+if(file.exists("durationAndRecession.csv")) {
+reviews2 <- read.csv("durationAndRecession.csv")  
+    } else {
+reviews <- unpackJSON("yelp_academic_dataset_review.json") 
+
+##################################################
+#### Create a duration variable ##################
+##################################################
+
+## Drop row names
+reviews$row.names <- reviews$votes <- reviews$user_id <- reviews$review_id <- reviews$stars <- reviews$text <- reviews$type <-  NULL 
+
+
+reviews$date <- unlist(reviews$date) 
+reviews$business_id <- unlist(reviews$business_id)
+
+reviews$date <- as.Date(reviews$date)
+
+duration <- ddply(reviews, "business_id", summarise, duration = difftime(max(date), min(date), units = "days"))
+
+#########################################################
+####################### Create Recession Indicator #######
+##########################################################
+
+# Find the last date of a review for each business
+maxDateOfReview <- ddply(reviews, "business_id", summarise, (max(date)))
+
+# Record an Indicator that tells us if the last date of the review was during a recession.
+#DATEs of Recession FROM NBER. NBER.ORG/CYCLES/CYCLESMAIN.HTML 
+maxDateOfReview$recession <- ifelse(maxDateOfReview$..1 > as.Date("2007/12/01", format = "%Y/%M/%d") & maxDateOfReview$..1 < as.Date("2009/06/01", format = "%Y/%M/%d"), 1, 0) 
+  # NOTE TO EVAN you had the 1 and 0 backwards
+
+reviews2 <- merge(maxDateOfReview, duration, by="business_id")
+
+write.csv(reviews2,file="durationAndRecession.csv", row.names=FALSE)
+
+} # ends else   
+
+
+### NOTE TO EVAN: You needed to do the recession indicator inside the else{} above, and write it out into the .csv. Otherwise the the results were not stored when reading in the old duration.csv
+
+##############################################################################################
+####################### Number of Competing Restaurants ######################################
+##############################################################################################
+
+get.dists <- function(i) {
+  ref.pt <- with(expandedDataFrame2[i,],c(longitude,latitude))
+  points <- as.matrix(with(expandedDataFrame2[-i,],cbind(longitude,latitude)))
+  dists  <- spDistsN1(points, ref.pt, longlat=T)
+  return(length(which(dists<0.4)))
+}
+expandedDataFrame2$count <- sapply(1:nrow(expandedDataFrame2),get.dists)
+
+
+##############################################################################################
+####################### MERGE ################################################################
+##############################################################################################
+
+expandedDataFrame2 <- merge(expandedDataFrame2, reviews2, by="business_id")
+
+expandedDataFrame2$delta <- ifelse(expandedDataFrame2$open==1, 0, 1)  
+
+write.csv(expandedDataFrame2, file="cleanData.csv", row.names=FALSE)
+
+
+#library(reshape)
+
+#expandedDataFrame2 <- rename(expandedDataFrame2, c(..1="max_date"))
+#newdat1 <- newdat[order(max_date),]
+ 
+
